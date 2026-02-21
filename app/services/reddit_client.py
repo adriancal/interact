@@ -1,6 +1,9 @@
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 from typing import Optional, Any
 import asyncio
+import os
+import random
+from pathlib import Path
 from datetime import datetime
 
 from app.models.schemas import (
@@ -21,13 +24,148 @@ class RedditClient:
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
 
+    def _proxy_candidates(self) -> list[dict]:
+        # Priority 1: explicit env override (single proxy)
+        if os.getenv("REDDIT_PROXY_SERVER"):
+            return [{
+                "server": os.getenv("REDDIT_PROXY_SERVER"),
+                "username": os.getenv("REDDIT_PROXY_USER", ""),
+                "password": os.getenv("REDDIT_PROXY_PASS", ""),
+            }]
+
+        # Priority 2: full Webshare residential list
+        proxy_file = Path("/home/adrcal/.openclaw/residentialproxy.txt")
+        candidates = []
+        if proxy_file.exists():
+            lines = [ln.strip() for ln in proxy_file.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+            random.shuffle(lines)
+            for ln in lines:
+                try:
+                    host, port, user, pwd = ln.split(":", 3)
+                    candidates.append({
+                        "server": f"http://{host}:{port}",
+                        "username": user,
+                        "password": pwd,
+                    })
+                except Exception:
+                    continue
+
+        # Fallback one
+        if not candidates:
+            candidates.append({
+                "server": "http://p.webshare.io:80",
+                "username": f"elvcwkcq-{random.randint(1,10)}",
+                "password": "njyaofdipcyb",
+            })
+        return candidates
+
+    async def _build_context(self, proxy: dict) -> BrowserContext:
+        browser = await self._playwright.chromium.launch(
+            headless=True,
+            proxy=proxy,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            viewport={"width": 1366, "height": 768},
+            ignore_https_errors=True,
+        )
+        self._browser = browser
+        return context
+
+    async def _is_proxy_blocked(self, context: BrowserContext) -> bool:
+        page = await context.new_page()
+        try:
+            await page.goto("https://www.reddit.com", wait_until="domcontentloaded", timeout=25000)
+            title = (await page.title() or "").lower()
+            html = (await page.content() or "").lower()
+            return ("blocked" in title) or ("<title>blocked" in html)
+        except Exception:
+            return True
+        finally:
+            await page.close()
+
     async def initialize(self, cookies: list[dict]):
         self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(headless=True)
-        self._context = await self._browser.new_context(
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
-        )
-        await self._context.add_cookies(cookies)
+
+        max_attempts = int(os.getenv("REDDIT_PROXY_MAX_ATTEMPTS", "80"))
+        candidates = self._proxy_candidates()[:max_attempts]
+
+        last_err = None
+        selected_context = None
+        for proxy in candidates:
+            try:
+                context = await self._build_context(proxy)
+                blocked = await self._is_proxy_blocked(context)
+                if blocked:
+                    await context.close()
+                    if self._browser:
+                        await self._browser.close()
+                    continue
+                selected_context = context
+                break
+            except Exception as e:
+                last_err = e
+                try:
+                    if self._context:
+                        await self._context.close()
+                    if self._browser:
+                        await self._browser.close()
+                except Exception:
+                    pass
+                continue
+
+        if not selected_context:
+            raise RuntimeError(f"No working proxy found from Webshare list (attempted {len(candidates)}). Last error: {last_err}")
+
+        self._context = selected_context
+
+        # Sanitize cookies for Playwright compatibility
+        cleaned = []
+        for c in cookies:
+            name = c.get("name")
+            value = c.get("value")
+            domain = c.get("domain")
+            path = c.get("path", "/")
+            if not name or value is None or not domain:
+                continue
+            if "reddit.com" not in domain:
+                continue
+
+            # Common malformed variant from browser exports
+            if domain == ".www.reddit.com":
+                domain = "www.reddit.com"
+
+            item = {
+                "name": name,
+                "value": value,
+                "domain": domain,
+                "path": path,
+                "secure": bool(c.get("secure", False)),
+                "httpOnly": bool(c.get("httpOnly", False)),
+            }
+
+            exp = c.get("expires", c.get("expirationDate"))
+            if exp:
+                try:
+                    item["expires"] = int(exp)
+                except Exception:
+                    pass
+
+            cleaned.append(item)
+
+        # Add cookies one-by-one so one bad cookie won't kill login
+        for c in cleaned:
+            try:
+                await self._context.add_cookies([c])
+            except Exception:
+                continue
+
         self._page = await self._context.new_page()
 
     async def close(self):
