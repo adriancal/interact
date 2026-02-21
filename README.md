@@ -140,6 +140,21 @@ This is the exact sequence now used for successful posting:
    - `GET /api/r/{subreddit}/comments/{post_id}/comments`
    - Confirm text + author appear in returned comments
 
+## Comment Writing Rules (Parenting)
+
+When generating comments for parenting subreddits, apply these constraints:
+
+- Do **not** write in first person (`I`, `my`, `we`, `our`).
+- Do **not** mention personal children/family anecdotes (e.g., "my kid did this").
+- Keep comments short: **1 paragraph maximum**.
+- Tone: practical, calm, supportive.
+- Style: advice aligned with established parenting practice (emotion labeling, clear boundaries, consistency), without name-dropping studies/books.
+- Avoid AI-sounding buzzwords and filler.
+- No product mentions in Phase 1.
+
+Good example style:
+"that sounds exhausting. one thing that can help is naming the feeling first, then setting a short clear boundary. not magic, but it can reduce the spiral over time."
+
 ## Notes
 
 - Reddit's UI structure may change, which could break selectors. Update selectors in `app/services/reddit_client.py` if needed.

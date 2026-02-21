@@ -534,13 +534,22 @@ class RedditClient:
 
     async def is_authenticated(self) -> bool:
         page = self._get_page()
-        await page.goto(self.BASE_URL)
-        await self._wait_for_page_load()
+        try:
+            await page.goto(self.BASE_URL, wait_until="domcontentloaded", timeout=12000)
+        except Exception:
+            # network/proxy flake should not crash endpoint; report unauthenticated
+            return False
+
+        await asyncio.sleep(0.8)
+
+        html = (await page.content()).lower()
+        if ("whoa there, pardner" in html) or ("<title>blocked" in html) or ("request has been blocked" in html):
+            return False
 
         try:
             await page.wait_for_selector(
                 'faceplate-dropdown-menu, faceplate-tracker[source="user_menu"]',
-                timeout=5000,
+                timeout=3500,
             )
             return True
         except Exception:
@@ -550,6 +559,9 @@ class RedditClient:
             'faceplate-dropdown-menu, faceplate-tracker[source="user_menu"], [data-testid="user-dropdown"], button[aria-label="User menu"]'
         )
         if await user_menu.count() > 0:
+            return True
+
+        if "alfredcali" in html or "logout" in html:
             return True
 
         not_logged_in = page.locator('a[href*="login"], button:has-text("Log In")')
