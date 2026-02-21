@@ -33,11 +33,12 @@ class RedditClient:
                 "password": os.getenv("REDDIT_PROXY_PASS", ""),
             }]
 
-        # Priority 2: full Webshare residential list
-        proxy_file = Path("/home/adrcal/.openclaw/residentialproxy.txt")
         candidates = []
-        if proxy_file.exists():
-            lines = [ln.strip() for ln in proxy_file.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+
+        # Priority 2: pre-vetted working proxies
+        working_file = Path("/home/adrcal/.openclaw/workspace/interact/scripts/working_proxies.txt")
+        if working_file.exists():
+            lines = [ln.strip() for ln in working_file.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
             random.shuffle(lines)
             for ln in lines:
                 try:
@@ -49,6 +50,23 @@ class RedditClient:
                     })
                 except Exception:
                     continue
+
+        # Priority 3: full Webshare residential list
+        if not candidates:
+            proxy_file = Path("/home/adrcal/.openclaw/residentialproxy.txt")
+            if proxy_file.exists():
+                lines = [ln.strip() for ln in proxy_file.read_text().splitlines() if ln.strip() and not ln.startswith("#")]
+                random.shuffle(lines)
+                for ln in lines:
+                    try:
+                        host, port, user, pwd = ln.split(":", 3)
+                        candidates.append({
+                            "server": f"http://{host}:{port}",
+                            "username": user,
+                            "password": pwd,
+                        })
+                    except Exception:
+                        continue
 
         # Fallback one
         if not candidates:
@@ -81,10 +99,15 @@ class RedditClient:
     async def _is_proxy_blocked(self, context: BrowserContext) -> bool:
         page = await context.new_page()
         try:
-            await page.goto("https://www.reddit.com", wait_until="domcontentloaded", timeout=25000)
+            await page.goto("https://www.reddit.com", wait_until="domcontentloaded", timeout=12000)
             title = (await page.title() or "").lower()
             html = (await page.content() or "").lower()
-            return ("blocked" in title) or ("<title>blocked" in html)
+            return (
+                ("blocked" in title)
+                or ("<title>blocked" in html)
+                or ("whoa there, pardner" in html)
+                or ("request has been blocked" in html)
+            )
         except Exception:
             return True
         finally:
@@ -93,37 +116,8 @@ class RedditClient:
     async def initialize(self, cookies: list[dict]):
         self._playwright = await async_playwright().start()
 
-        max_attempts = int(os.getenv("REDDIT_PROXY_MAX_ATTEMPTS", "80"))
+        max_attempts = int(os.getenv("REDDIT_PROXY_MAX_ATTEMPTS", "20"))
         candidates = self._proxy_candidates()[:max_attempts]
-
-        last_err = None
-        selected_context = None
-        for proxy in candidates:
-            try:
-                context = await self._build_context(proxy)
-                blocked = await self._is_proxy_blocked(context)
-                if blocked:
-                    await context.close()
-                    if self._browser:
-                        await self._browser.close()
-                    continue
-                selected_context = context
-                break
-            except Exception as e:
-                last_err = e
-                try:
-                    if self._context:
-                        await self._context.close()
-                    if self._browser:
-                        await self._browser.close()
-                except Exception:
-                    pass
-                continue
-
-        if not selected_context:
-            raise RuntimeError(f"No working proxy found from Webshare list (attempted {len(candidates)}). Last error: {last_err}")
-
-        self._context = selected_context
 
         # Sanitize cookies for Playwright compatibility
         cleaned = []
@@ -136,8 +130,6 @@ class RedditClient:
                 continue
             if "reddit.com" not in domain:
                 continue
-
-            # Common malformed variant from browser exports
             if domain == ".www.reddit.com":
                 domain = "www.reddit.com"
 
@@ -156,16 +148,51 @@ class RedditClient:
                     item["expires"] = int(exp)
                 except Exception:
                     pass
-
             cleaned.append(item)
 
-        # Add cookies one-by-one so one bad cookie won't kill login
-        for c in cleaned:
+        last_err = None
+        selected_context = None
+        for proxy in candidates:
             try:
-                await self._context.add_cookies([c])
-            except Exception:
+                context = await self._build_context(proxy)
+
+                # pre-check without cookies
+                if await self._is_proxy_blocked(context):
+                    await context.close()
+                    if self._browser:
+                        await self._browser.close()
+                    continue
+
+                # add cookies and re-check (some exits get blocked only after auth cookies)
+                for ck in cleaned:
+                    try:
+                        await context.add_cookies([ck])
+                    except Exception:
+                        continue
+
+                if await self._is_proxy_blocked(context):
+                    await context.close()
+                    if self._browser:
+                        await self._browser.close()
+                    continue
+
+                selected_context = context
+                break
+            except Exception as e:
+                last_err = e
+                try:
+                    if self._context:
+                        await self._context.close()
+                    if self._browser:
+                        await self._browser.close()
+                except Exception:
+                    pass
                 continue
 
+        if not selected_context:
+            raise RuntimeError(f"No working proxy found from Webshare list after cookie check (attempted {len(candidates)}). Last error: {last_err}")
+
+        self._context = selected_context
         self._page = await self._context.new_page()
 
     async def close(self):

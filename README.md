@@ -106,8 +106,43 @@ requests.post(
 )
 ```
 
+## Posting Sequence (Current Working Flow)
+
+This is the exact sequence now used for successful posting:
+
+1. **Load cookies** from browser export JSON (`cookies.json`)
+   - Keep only valid Reddit cookies (`reddit_session`, `token_v2`, `csrf_token`, etc.)
+   - Sanitize domains (e.g. `.www.reddit.com` -> `www.reddit.com`)
+
+2. **Pick proxy from known-good list**
+   - Primary source: `scripts/working_proxies.txt` (Playwright-validated)
+   - Fallback: full `/home/adrcal/.openclaw/residentialproxy.txt`
+
+3. **Initialize browser context via Playwright**
+   - Launch Chromium with selected residential proxy
+   - Apply anti-bot-friendly browser args + realistic UA/viewport
+   - Add sanitized cookies
+
+4. **Authenticate**
+   - `POST /api/auth/login` with cookie payload
+   - Verify with `GET /api/auth/status`
+
+5. **Find post candidates**
+   - `GET /api/search/subreddits`
+   - `GET /api/search/posts` for parenting topics
+   - `GET /api/r/{subreddit}/comments/{post_id}` to validate target post
+
+6. **Post comment**
+   - `POST /api/r/{subreddit}/comments/{post_id}/comment`
+   - Payload: `{ post_id, text, parent_id }`
+
+7. **Verify comment exists**
+   - `GET /api/r/{subreddit}/comments/{post_id}/comments`
+   - Confirm text + author appear in returned comments
+
 ## Notes
 
 - Reddit's UI structure may change, which could break selectors. Update selectors in `app/services/reddit_client.py` if needed.
 - Use responsibly to avoid rate limiting.
 - Some actions may require additional cookies or tokens depending on Reddit's current authentication requirements.
+- Proxy health by plain HTTP is not enough; browser-level checks are required for Reddit reliability.
