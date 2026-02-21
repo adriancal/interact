@@ -159,6 +159,21 @@ def post_comment(sub: str, post_id: str, text: str):
     return r.status_code, r.text
 
 
+def already_commented_on_post(sub: str, post_id: str) -> bool:
+    """Hard guard: never comment twice on same post."""
+    try:
+        r = requests.get(f"{BASE}/r/{sub}/comments/{post_id}/comments", params={"limit": 200}, timeout=120)
+        if r.status_code != 200:
+            return False
+        comments = r.json()
+        for c in comments:
+            if c.get("author") == "AlfredCali":
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def verify_comment(sub: str, post_id: str, snippet: str):
     for _ in range(4):
         time.sleep(2)
@@ -257,19 +272,47 @@ def main():
         pass
 
     # step 3: post on a different candidate; retry up to 3 targets
+    # hard dedupe: never comment twice on same post
+    commented_keys = {
+        f"{x.get('subreddit')}:{x.get('post_id')}"
+        for x in state.get("sessions_log", [])
+        if x.get("subreddit") and x.get("post_id")
+    }
+
     attempts = []
-    pool = [p for p in candidates[1:] if p.get("id") != observed.get("id")]
+    pool = [
+        p for p in candidates[1:]
+        if p.get("id") != observed.get("id")
+        and f"{p.get('subreddit')}:{p.get('id')}" not in commented_keys
+    ]
     random.shuffle(pool)
     max_post_attempts = min(3, len(pool))
 
+    if max_post_attempts == 0:
+        print(json.dumps({"status": "skipped", "reason": "no_new_posts_available", "run": args.run_label}))
+        return
+
     success = None
     for target in pool[:max_post_attempts]:
+        sub = target.get("subreddit")
+        pid = target.get("id")
+
+        # live dedupe check against Reddit comments
+        if already_commented_on_post(sub, pid):
+            attempts.append({
+                "subreddit": sub,
+                "post_id": pid,
+                "title": target.get("title"),
+                "code": "skip_already_commented",
+            })
+            continue
+
         comment = build_comment(target.get("title", ""))
-        code, body = post_comment(target.get("subreddit"), target.get("id"), comment)
+        code, body = post_comment(sub, pid, comment)
         attempts.append(
             {
-                "subreddit": target.get("subreddit"),
-                "post_id": target.get("id"),
+                "subreddit": sub,
+                "post_id": pid,
                 "title": target.get("title"),
                 "code": code,
             }
@@ -280,7 +323,7 @@ def main():
             time.sleep(random.uniform(1.0, 2.5))
             continue
 
-        verified = verify_comment(target.get("subreddit"), target.get("id"), comment[:40].lower())
+        verified = verify_comment(sub, pid, comment[:40].lower())
         success = (target, comment, verified)
         break
 

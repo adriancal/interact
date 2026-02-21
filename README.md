@@ -150,6 +150,7 @@ When generating comments for parenting subreddits, apply these constraints:
 - Tone: practical, calm, supportive.
 - Style: advice aligned with established parenting practice (emotion labeling, clear boundaries, consistency), without name-dropping studies/books.
 - Avoid AI-sounding buzzwords and filler.
+- **Never comment more than once on the same post.**
 - No product mentions in Phase 1.
 
 Good example style:
