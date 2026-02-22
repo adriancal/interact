@@ -105,6 +105,9 @@ def login():
 
 
 def fetch_candidates():
+    """Fetch post candidates, filtering to posts from last 2 months only."""
+    from datetime import datetime, timedelta
+    
     queries = [
         ("Parenting", "tantrum"),
         ("daddit", "self aware"),
@@ -115,6 +118,8 @@ def fetch_candidates():
     allowed = {"Parenting", "daddit", "toddlers", "raisingkids", "Mommit"}
     seen = set()
     out = []
+    two_months_ago = datetime.now(timezone.utc) - timedelta(days=60)
+    
     for sub, q in queries:
         r = requests.get(f"{BASE}/search/posts", params={"query": q, "subreddit": sub, "limit": 8}, timeout=90)
         if r.status_code != 200:
@@ -137,20 +142,59 @@ def fetch_candidates():
             if key in seen:
                 continue
             seen.add(key)
+            
+            # Fetch full post details to check creation date
+            try:
+                post_resp = requests.get(f"{BASE}/r/{psub}/comments/{pid}", timeout=60)
+                if post_resp.status_code == 200:
+                    post_data = post_resp.json()
+                    created_str = post_data.get("created")
+                    if created_str:
+                        # Parse ISO format datetime
+                        try:
+                            created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+                            if created < two_months_ago:
+                                continue  # Skip posts older than 2 months
+                        except Exception:
+                            pass  # If we can't parse date, include the post
+            except Exception:
+                pass  # If we can't fetch post details, include it anyway
+            
             out.append(p)
     random.shuffle(out)
     return out
 
 
-def build_comment(title: str):
-    t = (title or "").lower()
-    if "tantrum" in t or "meltdown" in t:
-        return "that sounds incredibly draining. a practical pattern is to name the emotion first, set one short clear boundary, and repeat the same response calmly without adding new arguments in the peak moment. consistency usually lowers intensity over time even when progress feels slow."
-    if "sleep" in t or "regression" in t or "bedtime" in t:
-        return "that phase can be brutal. a useful approach is a very predictable bedtime response: brief reassurance, one clear boundary, and the same sequence each wake. consistency usually matters more than finding a perfect trick."
-    if "discipline" in t or "boundary" in t:
-        return "that is a hard situation. clear limits work best when the message stays short, calm, and repeatable, with consequences that are immediate and predictable. progress is usually uneven, but consistency tends to reduce conflict over time."
-    return "that sounds really tough. a practical approach is to acknowledge the feeling first, then set one short clear boundary and keep the response consistent. it is not instant, but repetition usually improves things over time."
+def build_comment(title: str, body: str | None, subreddit: str) -> str:
+    """Generate custom comment using LLM based on full post content."""
+    import sys
+    
+    # Load NVIDIA_API_KEY from .env if not already in environment
+    if not os.getenv("NVIDIA_API_KEY"):
+        env_file = ROOT.parent / ".env"
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("NVIDIA_API_KEY="):
+                    # Handle both 'value' and "value" formats
+                    val = line.split("=", 1)[1].strip()
+                    if (val.startswith("'") and val.endswith("'")) or \
+                       (val.startswith('"') and val.endswith('"')):
+                        val = val[1:-1]
+                    os.environ["NVIDIA_API_KEY"] = val
+                    break
+    
+    # Import from same directory
+    try:
+        from comment_generator import generate_comment
+        return generate_comment(title, body, subreddit)
+    except Exception as e:
+        # Fallback to simple template if LLM fails
+        t = (title or "").lower()
+        if "tantrum" in t:
+            return "that sounds tough. naming the emotion and keeping responses short and calm usually helps over time."
+        if "sleep" in t:
+            return "sleep phases are hard. a predictable routine usually matters more than any single trick."
+        return "that sounds really tough. consistency and calm usually help, even when it feels slow."
 
 
 def post_comment(sub: str, post_id: str, text: str):
@@ -307,7 +351,7 @@ def main():
             })
             continue
 
-        comment = build_comment(target.get("title", ""))
+        comment = build_comment(target.get("title", ""), target.get("body"), target.get("subreddit"))
         code, body = post_comment(sub, pid, comment)
         attempts.append(
             {
@@ -329,7 +373,7 @@ def main():
 
     if not success:
         fallback_target = pool[0] if pool else {"subreddit": "?", "id": "?", "title": "?"}
-        fallback_comment = build_comment(fallback_target.get("title", ""))
+        fallback_comment = build_comment(fallback_target.get("title", ""), fallback_target.get("body"), fallback_target.get("subreddit"))
         log_path = write_log(args.run_label, observed, fallback_target, fallback_comment, "error", f"post_failed_after_{max_post_attempts}_attempts")
         print(
             json.dumps(

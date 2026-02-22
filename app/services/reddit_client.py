@@ -25,6 +25,10 @@ class RedditClient:
         self._page: Optional[Page] = None
 
     def _proxy_candidates(self) -> list[dict]:
+        # Skip proxy entirely if env var is set
+        if os.getenv("REDDIT_NO_PROXY", "").lower() in ("1", "true", "yes"):
+            return []  # Empty list = no proxy
+        
         # Priority 1: explicit env override (single proxy)
         if os.getenv("REDDIT_PROXY_SERVER"):
             return [{
@@ -152,42 +156,74 @@ class RedditClient:
 
         last_err = None
         selected_context = None
-        for proxy in candidates:
+        
+        # No-proxy mode: direct connection
+        if not candidates:
             try:
-                context = await self._build_context(proxy)
-
-                # pre-check without cookies
-                if await self._is_proxy_blocked(context):
-                    await context.close()
-                    if self._browser:
-                        await self._browser.close()
-                    continue
-
-                # add cookies and re-check (some exits get blocked only after auth cookies)
+                browser = await self._playwright.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--disable-blink-features=AutomationControlled",
+                    ],
+                )
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                    viewport={"width": 1366, "height": 768},
+                    ignore_https_errors=True,
+                )
+                self._browser = browser
+                
+                # Add cookies
                 for ck in cleaned:
                     try:
                         await context.add_cookies([ck])
                     except Exception:
                         continue
-
-                if await self._is_proxy_blocked(context):
-                    await context.close()
-                    if self._browser:
-                        await self._browser.close()
-                    continue
-
+                
                 selected_context = context
-                break
             except Exception as e:
                 last_err = e
+        else:
+            # Proxy mode: try each proxy
+            for proxy in candidates:
                 try:
-                    if self._context:
-                        await self._context.close()
-                    if self._browser:
-                        await self._browser.close()
-                except Exception:
-                    pass
-                continue
+                    context = await self._build_context(proxy)
+
+                    # pre-check without cookies
+                    if await self._is_proxy_blocked(context):
+                        await context.close()
+                        if self._browser:
+                            await self._browser.close()
+                        continue
+
+                    # add cookies and re-check (some exits get blocked only after auth cookies)
+                    for ck in cleaned:
+                        try:
+                            await context.add_cookies([ck])
+                        except Exception:
+                            continue
+
+                    if await self._is_proxy_blocked(context):
+                        await context.close()
+                        if self._browser:
+                            await self._browser.close()
+                        continue
+
+                    selected_context = context
+                    break
+                except Exception as e:
+                    last_err = e
+                    try:
+                        if self._context:
+                            await self._context.close()
+                        if self._browser:
+                            await self._browser.close()
+                    except Exception:
+                        pass
+                    continue
 
         if not selected_context:
             raise RuntimeError(f"No working proxy found from Webshare list after cookie check (attempted {len(candidates)}). Last error: {last_err}")
