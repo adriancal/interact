@@ -301,10 +301,10 @@ class RedditClient:
 
         if subreddit:
             search_url = (
-                f"{self.BASE_URL}/r/{subreddit}/search/?q={query}&restrict_sr=1"
+                f"{self.BASE_URL}/r/{subreddit}/search/?q={query}&restrict_sr=1&sort=new"
             )
         else:
-            search_url = f"{self.BASE_URL}/search/?q={query}&type=link"
+            search_url = f"{self.BASE_URL}/search/?q={query}&type=link&sort=new"
 
         await page.goto(search_url)
         await self._wait_for_page_load()
@@ -420,6 +420,13 @@ class RedditClient:
         await page.goto(post_url)
         await self._wait_for_page_load()
 
+        # Wait for the shreddit-post web component to be in the DOM and rendered
+        try:
+            await page.wait_for_selector("shreddit-post", timeout=8000)
+        except Exception:
+            pass
+        await asyncio.sleep(2)  # let the component fully render its slotted content
+
         title_elem = page.locator(
             'shreddit-post h1, [data-testid="post-title"], h1[slot="title"]'
         )
@@ -435,8 +442,11 @@ class RedditClient:
             author_text = await author_elem.first.inner_text()
             author = author_text.replace("u/", "").strip()
 
+        # shreddit text posts put body content in the slot="text-body" div
         body_elem = page.locator(
-            'shreddit-post div[data-testid="post-body"], div[data-click-id="body"]'
+            'shreddit-post div[slot="text-body"], '
+            'shreddit-post [data-adclicklocation="text_body"], '
+            'div[data-click-id="body"]'
         )
         body = None
         if await body_elem.count() > 0:
@@ -453,6 +463,26 @@ class RedditClient:
             except ValueError:
                 pass
 
+        # Extract creation timestamp from shreddit-post attribute or <time> element
+        created = None
+        post_elem = page.locator("shreddit-post")
+        if await post_elem.count() > 0:
+            ts = await post_elem.first.get_attribute("created-timestamp")
+            if ts:
+                try:
+                    created = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except Exception:
+                    pass
+        if not created:
+            time_elem = page.locator("faceplate-timeago time, shreddit-post time")
+            if await time_elem.count() > 0:
+                dt_str = await time_elem.first.get_attribute("datetime")
+                if dt_str:
+                    try:
+                        created = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                    except Exception:
+                        pass
+
         return Post(
             id=post_id,
             title=title,
@@ -462,6 +492,7 @@ class RedditClient:
             url=post_url,
             body=body,
             is_self=True,
+            created=created,
         )
 
     async def get_comments(

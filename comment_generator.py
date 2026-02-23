@@ -60,30 +60,36 @@ def generate_comment(title: str, body: str | None, subreddit: str) -> str:
         body_text = body_text[:800] + "..."
     
     # Build prompt with strict rules
-    prompt = f"""Write a brief, helpful comment responding to this Reddit post.
+    prompt = f"""Write a short Reddit comment reacting to this parenting post. Under 55 words, lowercase only.
 
 Subreddit: r/{subreddit}
 Post Title: {title}
 Post Body: {body_text if body_text else "[no body text]"}
 
-RULES:
-- Keep it to 1-2 sentences, max 50 words
-- Write in lowercase only (like natural casual conversation)
-- Be specific to THIS post — reference details from the title/body
-- Sound personal and human, not generic
-- NO AI vocabulary: avoid words like "delve", "crucial", "robust", "seamless", "underscore", "multifaceted", "testament", "tapestry", "realm", "navigate", "comprehensive", "meticulous", "paramount", "pivotal", "foster", "cultivate"
-- NO filler phrases like "it's important to note that", "at the end of the day"
-- Give ONE concrete piece of advice specific to this situation
-- Don't be preachy or judgmental
+TONE: Casual, warm, like someone reading this on their phone and genuinely reacting. Short sentences. Sometimes a fragment. Not every comment needs to end neatly.
 
-Respond with ONLY the comment text, nothing else."""
+VARY the structure — sometimes just empathy, sometimes a casual tip, sometimes a question. Not always the same shape.
+
+Natural openers: "ugh", "oh man", "yeah", "honestly", "that sounds rough", "that phase is brutal"
+
+STRICT RULES — never break these:
+- Never claim personal experience: no "been there", "same boat", "we went through this", "my kid did that", "I remember that phase", "know that feeling"
+- No first person at all (no I, my, we, our)
+- Only say things that are universally true or well-known — never invent a personal story
+- Reference specific details from this post (not generic advice)
+- Don't structure as "acknowledge → tip" every time
+- Don't use: "absolutely", "truly", "genuinely"
+- Don't sound like a parenting blog or sleep consultant
+- Don't moralize
+
+Respond with ONLY the comment text."""
 
     try:
         completion = client.chat.completions.create(
             model="z-ai/glm5",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.7,
-            top_p=0.9,
+            temperature=0.85,
+            top_p=0.92,
             max_tokens=150,
             extra_body={"chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True}},
             stream=False
@@ -125,18 +131,13 @@ def generate_comment_retry(title: str, body: str | None, subreddit: str, bad_wor
     
     avoided = ", ".join(bad_words[:5])
     
-    prompt = f"""Write a brief Reddit comment. AVOID these words: {avoided}
+    prompt = f"""Write a short Reddit comment. AVOID these words: {avoided}
 
 Subreddit: r/{subreddit}
 Post Title: {title}
 Post Body: {body_text if body_text else "[no body text]"}
 
-RULES:
-- 1-2 sentences max
-- lowercase only, casual tone
-- specific to this post's details
-- simple words only, avoid fancy vocabulary
-- one concrete tip only
+Casual, lowercase, under 55 words. React to the specific situation. No first person (no I, my, we). Never claim personal experience ("been there", "same boat", "my kid", "we went through this"). Only say things that are factually true or widely known. Sometimes just empathy, sometimes a tip — vary it.
 
 Comment:"""
 
