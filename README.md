@@ -116,7 +116,7 @@ This is the exact sequence now used for successful posting:
 
 2. **Pick proxy from known-good list**
    - Primary source: `scripts/working_proxies.txt` (Playwright-validated)
-   - Fallback: full `/home/adrcal/.openclaw/residentialproxy.txt`
+   - Fallback: full `residentialproxy.txt` (repo root, gitignored)
 
 3. **Initialize browser context via Playwright**
    - Launch Chromium with selected residential proxy

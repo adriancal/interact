@@ -11,10 +11,10 @@ from pathlib import Path
 import requests
 
 BASE = "http://127.0.0.1:8000/api"
-ROOT = Path("/home/adrcal/.openclaw/workspace")
-INTERACT = ROOT / "interact"
-STATE_PATH = ROOT / "memory" / "reddit_state.json"
-LOG_DIR = ROOT / "shared" / "reddit_kapi"
+REPO_ROOT = Path(__file__).resolve().parent
+STATE_PATH = REPO_ROOT / "data" / "reddit_state.json"
+LOG_DIR = REPO_ROOT / "logs"
+COOKIES_DEFAULT = REPO_ROOT / "cookies.json"
 
 
 def now_iso():
@@ -43,16 +43,16 @@ def ensure_api_up():
     except Exception:
         pass
 
-    cmd = (
-        "cd /home/adrcal/.openclaw/workspace/interact && "
-        "source venv/bin/activate && "
-        "nohup env REDDIT_PROXY_MAX_ATTEMPTS=8 "
-        "uvicorn app.main:app --host 0.0.0.0 --port 8000 "
-        ">/tmp/interact_api.log 2>&1 &"
+    import sys
+    subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"],
+        cwd=str(REPO_ROOT),
+        stdout=open("/tmp/interact_api.log", "w"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
-    subprocess.run(["bash", "-lc", cmd], check=False)
 
-    for _ in range(8):
+    for _ in range(12):
         time.sleep(1)
         try:
             r = requests.get("http://127.0.0.1:8000/", timeout=5)
@@ -91,7 +91,7 @@ def sanitize_cookies(raw):
 
 
 def login(cookies_file: Path = None):
-    path = cookies_file if cookies_file else INTERACT / "cookies.json"
+    path = cookies_file if cookies_file else COOKIES_DEFAULT
     raw = load_json(path, [])
     cookies = sanitize_cookies(raw)
     r = requests.post(f"{BASE}/auth/login", json={"cookies": cookies}, timeout=120)
@@ -201,34 +201,17 @@ def fetch_candidates():
 
 def build_comment(title: str, body: str | None, subreddit: str) -> str:
     """Generate custom comment using LLM based on full post content."""
-    import sys
-    
-    # Load NVIDIA_API_KEY from .env if not already in environment
-    if not os.getenv("NVIDIA_API_KEY"):
-        env_file = ROOT.parent / ".env"
-        if env_file.exists():
-            for line in env_file.read_text().splitlines():
-                if line.startswith("NVIDIA_API_KEY="):
-                    # Handle both 'value' and "value" formats
-                    val = line.split("=", 1)[1].strip()
-                    if (val.startswith("'") and val.endswith("'")) or \
-                       (val.startswith('"') and val.endswith('"')):
-                        val = val[1:-1]
-                    os.environ["NVIDIA_API_KEY"] = val
-                    break
-    
-    # Import from same directory
-    try:
-        from comment_generator import generate_comment
-        return generate_comment(title, body, subreddit)
-    except Exception as e:
-        # Fallback to simple template if LLM fails
-        t = (title or "").lower()
-        if "tantrum" in t:
-            return "that sounds tough. naming the emotion and keeping responses short and calm usually helps over time."
-        if "sleep" in t:
-            return "sleep phases are hard. a predictable routine usually matters more than any single trick."
-        return "that sounds really tough. consistency and calm usually help, even when it feels slow."
+    # Load API keys from .env if not already in environment
+    env_file = REPO_ROOT / ".env"
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            for key in ("GEMINI_API_KEY", "NVIDIA_API_KEY"):
+                if line.startswith(f"{key}=") and not os.getenv(key):
+                    val = line.split("=", 1)[1].strip().strip("'\"")
+                    os.environ[key] = val
+
+    from comment_generator import generate_comment
+    return generate_comment(title, body, subreddit)
 
 
 def post_comment(sub: str, post_id: str, text: str):
@@ -399,7 +382,16 @@ def main():
             })
             continue
 
-        comment = build_comment(target.get("title", ""), target.get("body"), target.get("subreddit"))
+        try:
+            comment = build_comment(target.get("title", ""), target.get("body"), target.get("subreddit"))
+        except Exception as e:
+            attempts.append({
+                "subreddit": sub,
+                "post_id": pid,
+                "title": target.get("title"),
+                "code": f"llm_error: {e}",
+            })
+            continue
 
         if args.dry_run:
             attempts.append({

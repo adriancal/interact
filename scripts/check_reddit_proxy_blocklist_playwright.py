@@ -5,9 +5,10 @@ import random
 from pathlib import Path
 from playwright.async_api import async_playwright
 
-PROXY_FILE = Path('/home/adrcal/.openclaw/residentialproxy.txt')
-OUT_JSON = Path('/home/adrcal/.openclaw/workspace/interact/scripts/proxy_check_report_playwright.json')
-OUT_WORKING = Path('/home/adrcal/.openclaw/workspace/interact/scripts/working_proxies.txt')
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+PROXY_FILE = _REPO_ROOT / 'residentialproxy.txt'
+OUT_JSON = _REPO_ROOT / 'scripts' / 'proxy_check_report_playwright.json'
+OUT_WORKING = _REPO_ROOT / 'scripts' / 'working_proxies.txt'
 
 UAS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',

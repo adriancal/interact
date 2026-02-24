@@ -3,33 +3,41 @@
 
 import os
 import sys
+import requests
 from openai import OpenAI
 
-# Load API key from environment
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
-if not NVIDIA_API_KEY:
-    raise ValueError("NVIDIA_API_KEY not found in environment. Check .env file.")
+# Model identifiers
+GEMINI_FLASH = "gemini-3-flash-preview"
+GEMINI_PRO = "gemini-2.5-pro"
+NVIDIA_MODEL = "z-ai/glm5"
 
-# AI vocabulary to avoid (from humanizer skill)
+MODEL_ALIASES = {
+    "flash": GEMINI_FLASH,
+    "pro": GEMINI_PRO,
+    "nvidia": NVIDIA_MODEL,
+}
+
+GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# AI vocabulary to avoid
 AI_WORDS_TIER1 = {
-    'delve', 'crucial', 'robust', 'seamless', 'multifaceted', 'multifaceted',
-    'underscore', 'underscores', 'underscores', 'underscores', 'underscores',
-    'testament', 'testaments', 'tapestry', 'intricate', 'realm', 'realms',
-    'eloquent', 'eloquently', 'bustling', 'vibrant', 'vibrancy',
-    'leverage', 'leveraging', 'synergy', 'synergies', 'holistic', 'holistically',
-    'landscape', 'landscapes', 'ecosystem', 'ecosystems',
+    'delve', 'crucial', 'robust', 'seamless', 'multifaceted',
+    'underscore', 'underscores', 'testament', 'testaments', 'tapestry',
+    'intricate', 'realm', 'realms', 'eloquent', 'eloquently', 'bustling',
+    'vibrant', 'vibrancy', 'leverage', 'leveraging', 'synergy', 'synergies',
+    'holistic', 'holistically', 'landscape', 'landscapes', 'ecosystem', 'ecosystems',
 }
 
 AI_WORDS_TIER2 = {
     'navigate', 'navigation', 'navigating', 'comprehensive', 'comprehensively',
     'meticulous', 'meticulously', 'paramount', 'imperative', 'imperatives',
-    'dynamic', 'dynamics', 'inherent', 'inherently', 'notably', 'underscore',
-    'underscores', 'pivotal', 'integral', 'integrally', 'foster', 'fosters',
-    'fostering', 'cultivate', 'cultivates', 'cultivating', 'cultivation',
+    'dynamic', 'dynamics', 'inherent', 'inherently', 'notably',
+    'pivotal', 'integral', 'integrally', 'foster', 'fosters', 'fostering',
+    'cultivate', 'cultivates', 'cultivating', 'cultivation',
 }
 
+
 def check_ai_vocabulary(text: str) -> list[str]:
-    """Check for AI-sounding words"""
     words = text.lower().split()
     found = []
     for word in words:
@@ -40,35 +48,22 @@ def check_ai_vocabulary(text: str) -> list[str]:
             found.append(f"TIER2: {clean}")
     return found
 
-def generate_comment(title: str, body: str | None, subreddit: str) -> str:
-    """Generate a custom Reddit comment based on post content."""
-    
-    import sys
-    print("DEBUG: Starting comment generation...", file=sys.stderr)
-    sys.stderr.flush()
-    
-    client = OpenAI(
-        base_url="https://integrate.api.nvidia.com/v1",
-        api_key=NVIDIA_API_KEY
-    )
-    print("DEBUG: Client created, calling API...", file=sys.stderr)
-    sys.stderr.flush()
-    
-    # Truncate body if too long
+
+def _build_prompt(title: str, body: str | None, subreddit: str) -> str:
     body_text = (body or "").strip()
     if len(body_text) > 800:
         body_text = body_text[:800] + "..."
-    
-    # Build prompt with strict rules
-    prompt = f"""Write a short Reddit comment reacting to this parenting post. Under 55 words, lowercase only.
+    return f"""Write a short Reddit comment reacting to this parenting post. Under 55 words, lowercase only.
 
 Subreddit: r/{subreddit}
 Post Title: {title}
 Post Body: {body_text if body_text else "[no body text]"}
 
-TONE: Casual, warm, like someone reading this on their phone and genuinely reacting. Short sentences. Sometimes a fragment. Not every comment needs to end neatly.
+STRUCTURE: Every comment must include both:
+1. A brief empathetic reaction to the specific situation described
+2. At least one concrete, actionable suggestion tied to the details in the post — not generic advice, something that directly addresses what they described
 
-VARY the structure — sometimes just empathy, sometimes a casual tip, sometimes a question. Not always the same shape.
+TONE: Casual, warm, like a friend texting. Short sentences. The tip should feel offhand, not like a parenting blog recommendation.
 
 Natural openers: "ugh", "oh man", "yeah", "honestly", "that sounds rough", "that phase is brutal"
 
@@ -76,62 +71,19 @@ STRICT RULES — never break these:
 - Never claim personal experience: no "been there", "same boat", "we went through this", "my kid did that", "I remember that phase", "know that feeling"
 - No first person at all (no I, my, we, our)
 - Only say things that are universally true or well-known — never invent a personal story
-- Reference specific details from this post (not generic advice)
-- Don't structure as "acknowledge → tip" every time
 - Don't use: "absolutely", "truly", "genuinely"
 - Don't sound like a parenting blog or sleep consultant
 - Don't moralize
 
 Respond with ONLY the comment text."""
 
-    try:
-        completion = client.chat.completions.create(
-            model="z-ai/glm5",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.85,
-            top_p=0.92,
-            max_tokens=150,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True}},
-            stream=False
-        )
-        
-        comment = completion.choices[0].message.content.strip()
-        
-        # Post-process
-        comment = comment.lower()
-        
-        # Remove quotes if AI wrapped it
-        if comment.startswith('"') and comment.endswith('"'):
-            comment = comment[1:-1]
-        if comment.startswith("'") and comment.endswith("'"):
-            comment = comment[1:-1]
-        
-        # Check for AI vocabulary
-        ai_words = check_ai_vocabulary(comment)
-        if ai_words:
-            # Regenerate once if AI words found
-            return generate_comment_retry(title, body, subreddit, ai_words)
-        
-        return comment
-        
-    except Exception as e:
-        return f"error generating comment: {str(e)}"
 
-def generate_comment_retry(title: str, body: str | None, subreddit: str, bad_words: list[str]) -> str:
-    """Retry with stricter instructions if AI words found."""
-    
-    client = OpenAI(
-        base_url="https://integrate.api.nvidia.com/v1",
-        api_key=NVIDIA_API_KEY
-    )
-    
+def _build_retry_prompt(title: str, body: str | None, subreddit: str, bad_words: list[str]) -> str:
     body_text = (body or "").strip()
     if len(body_text) > 600:
         body_text = body_text[:600] + "..."
-    
     avoided = ", ".join(bad_words[:5])
-    
-    prompt = f"""Write a short Reddit comment. AVOID these words: {avoided}
+    return f"""Write a short Reddit comment. AVOID these words: {avoided}
 
 Subreddit: r/{subreddit}
 Post Title: {title}
@@ -141,52 +93,124 @@ Casual, lowercase, under 55 words. React to the specific situation. No first per
 
 Comment:"""
 
-    try:
-        completion = client.chat.completions.create(
-            model="z-ai/glm5",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.6,
-            max_tokens=100,
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-            stream=False
-        )
-        
-        comment = completion.choices[0].message.content.strip().lower()
-        
-        if comment.startswith('"') and comment.endswith('"'):
-            comment = comment[1:-1]
-        
-        return comment
-        
-    except Exception as e:
-        return f"error: {str(e)}"
+
+def _postprocess(text: str) -> str:
+    text = text.strip().lower()
+    if text.startswith('"') and text.endswith('"'):
+        text = text[1:-1]
+    if text.startswith("'") and text.endswith("'"):
+        text = text[1:-1]
+    return text
+
+
+def _call_gemini(model: str, prompt: str) -> str:
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY not set")
+    resp = requests.post(
+        f"{GEMINI_BASE}/{model}:generateContent",
+        headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+        json={"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+
+
+def _call_nvidia(prompt: str) -> str:
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        raise ValueError("NVIDIA_API_KEY not set")
+    client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=api_key)
+    completion = client.chat.completions.create(
+        model=NVIDIA_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.85,
+        top_p=0.92,
+        max_tokens=150,
+        timeout=60,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False, "clear_thinking": True}},
+        stream=False,
+    )
+    return completion.choices[0].message.content
+
+
+def _call_one(model: str, prompt: str) -> str:
+    """Call a specific model by name or alias."""
+    resolved = MODEL_ALIASES.get(model, model)
+    if resolved in (GEMINI_FLASH, GEMINI_PRO) or resolved.startswith("gemini"):
+        return _call_gemini(resolved, prompt)
+    return _call_nvidia(prompt)
+
+
+def _call_cascade(prompt: str) -> str:
+    """Try flash → pro → nvidia in order. Raises if all fail."""
+    errors = []
+    for fn in [
+        lambda: _call_gemini(GEMINI_FLASH, prompt),
+        lambda: _call_gemini(GEMINI_PRO, prompt),
+        lambda: _call_nvidia(prompt),
+    ]:
+        try:
+            return fn()
+        except Exception as e:
+            errors.append(str(e))
+    raise RuntimeError(f"All LLM providers failed: {errors}")
+
+
+def generate_comment(title: str, body: str | None, subreddit: str, model: str | None = None) -> str:
+    """Generate a Reddit comment. Raises on failure."""
+    prompt = _build_prompt(title, body, subreddit)
+    call = (lambda p: _call_one(model, p)) if model else _call_cascade
+
+    comment = _postprocess(call(prompt))
+
+    ai_words = check_ai_vocabulary(comment)
+    if ai_words:
+        retry_prompt = _build_retry_prompt(title, body, subreddit, ai_words)
+        comment = _postprocess(call(retry_prompt))
+
+    return comment
+
 
 def main():
     """CLI for testing comment generation."""
-    if len(sys.argv) < 2:
-        print("Usage: python comment_generator.py 'Post title' [optional body text]")
-        print("\nExample:")
-        print('  python comment_generator.py "My 3 year old throws tantrums at bedtime" "He screams for an hour every night"')
-        sys.exit(1)
-    
-    title = sys.argv[1]
-    body = sys.argv[2] if len(sys.argv) > 2 else None
-    subreddit = sys.argv[3] if len(sys.argv) > 3 else "parenting"
-    
-    print(f"\nPost: {title}")
-    if body:
-        print(f"Body: {body}")
-    print(f"Subreddit: r/{subreddit}")
+    import argparse
+    ap = argparse.ArgumentParser(description="Generate a Reddit comment using an LLM.")
+    ap.add_argument("title", help="Post title")
+    ap.add_argument("body", nargs="?", default=None, help="Post body (optional)")
+    ap.add_argument("subreddit", nargs="?", default="Parenting", help="Subreddit name (default: Parenting)")
+    ap.add_argument(
+        "--model",
+        default=None,
+        metavar="MODEL",
+        help=(
+            f"Model to use: 'flash' ({GEMINI_FLASH}), 'pro' ({GEMINI_PRO}), "
+            f"'nvidia' ({NVIDIA_MODEL}), or a full model name. "
+            "Omit to try all three in order."
+        ),
+    )
+    args = ap.parse_args()
+
+    print(f"\nPost: {args.title}")
+    if args.body:
+        print(f"Body: {args.body}")
+    print(f"Subreddit: r/{args.subreddit}")
+    if args.model:
+        resolved = MODEL_ALIASES.get(args.model, args.model)
+        print(f"Model: {resolved}")
+    else:
+        print(f"Model: cascade ({GEMINI_FLASH} → {GEMINI_PRO} → {NVIDIA_MODEL})")
     print("-" * 50)
-    
-    comment = generate_comment(title, body, subreddit)
-    
+
+    comment = generate_comment(args.title, args.body, args.subreddit, model=args.model)
+
     print(f"\nGenerated comment:\n{comment}")
-    
-    # Check for issues
+
     ai_words = check_ai_vocabulary(comment)
     if ai_words:
-        print(f"\n⚠️  AI vocabulary detected: {ai_words}")
+        print(f"\nAI vocabulary detected: {ai_words}")
+
 
 if __name__ == "__main__":
     main()

@@ -11,9 +11,9 @@ Output:
 
 Usage:
   python check_reddit_proxy_blocklist.py \
-    --proxy-file /home/adrcal/.openclaw/residentialproxy.txt \
-    --out-json /home/adrcal/.openclaw/workspace/interact/scripts/proxy_check_report.json \
-    --out-working /home/adrcal/.openclaw/workspace/interact/scripts/working_proxies.txt
+    --proxy-file residentialproxy.txt \
+    --out-json scripts/proxy_check_report.json \
+    --out-working scripts/working_proxies.txt
 """
 
 from __future__ import annotations

@@ -3,10 +3,11 @@ import argparse, asyncio, json, random
 from pathlib import Path
 from playwright.async_api import async_playwright
 
-PROXY_FILE = Path('/home/adrcal/.openclaw/residentialproxy.txt')
-COOKIES_FILE = Path('/home/adrcal/.openclaw/workspace/interact/cookies.json')
-OUT_JSONL = Path('/home/adrcal/.openclaw/workspace/interact/scripts/proxy_auth_results.jsonl')
-OUT_WORKING = Path('/home/adrcal/.openclaw/workspace/interact/scripts/working_proxies_auth.txt')
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+PROXY_FILE = _REPO_ROOT / 'residentialproxy.txt'
+COOKIES_FILE = _REPO_ROOT / 'cookies.json'
+OUT_JSONL = _REPO_ROOT / 'scripts' / 'proxy_auth_results.jsonl'
+OUT_WORKING = _REPO_ROOT / 'scripts' / 'working_proxies_auth.txt'
 
 UAS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',

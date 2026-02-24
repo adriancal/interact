@@ -2,6 +2,10 @@ venv/
 __pycache__/
 *.pyc
 cookies.json
+.env
+residentialproxy.txt
+data/
+logs/
 scripts/proxy_auth_results.jsonl
 scripts/proxy_check_report.json
 scripts/proxy_check_report_playwright.json

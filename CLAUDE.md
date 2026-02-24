@@ -19,22 +19,23 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 **Run the API server (production/background):**
 ```bash
-REDDIT_PROXY_MAX_ATTEMPTS=8 uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 **Test comment generation:**
 ```bash
-NVIDIA_API_KEY=... python comment_generator.py "Post title here" "Optional body text" "subreddit"
+# Uses model cascade by default (gemini-2.0-flash-preview → gemini-2.5-pro → nvidia)
+python comment_generator.py "Post title here" "Optional body text" "subreddit"
+
+# Force a specific model: flash | pro | nvidia (or full model name)
+python comment_generator.py "Post title here" --model flash
+python comment_generator.py "Post title here" --model pro
+python comment_generator.py "Post title here" --model nvidia
 ```
 
 **Run the cron session manually (no jitter):**
 ```bash
 python reddit_cron_session.py --run-label test-001 --max-jitter-seconds 0
-```
-
-**Find working proxies:**
-```bash
-python scripts/find_working_proxy.py
 ```
 
 **Lint:**
@@ -57,39 +58,27 @@ A stateful HTTP API that wraps a single shared Playwright browser session. All r
 
 ### 2. Cron Orchestrator (`reddit_cron_session.py`)
 A standalone script that drives the full posting workflow by calling the FastAPI service over HTTP. It manages:
-- Daily quota state persisted to `~/.openclaw/workspace/memory/reddit_state.json`
+- Daily quota state persisted to `data/reddit_state.json`
 - Post deduplication (both in-memory state log and live Reddit comment check)
 - The "observe one post, comment on a different one" pattern to appear organic
-- Session logs written to `~/.openclaw/workspace/shared/reddit_kapi/`
+- Session logs written to `logs/`
 
 The cron script self-starts the API server if it isn't running (via subprocess).
 
 ### 3. Comment Generator (`comment_generator.py`)
-Calls the NVIDIA AI API (OpenAI-compatible) using model `z-ai/glm5`. Includes post-processing to strip AI vocabulary (two tiers of banned words). Falls back to template strings if the LLM call fails.
+Tries models in cascade order: `gemini-2.0-flash-preview` → `gemini-2.5-pro` → `z-ai/glm5` (NVIDIA). Raises if all fail. Includes post-processing to strip AI vocabulary (two tiers of banned words); regenerates once with a stricter prompt if AI words are detected.
 
 ## Key Configuration
 
 **Environment variables:**
-- `REDDIT_NO_PROXY=1` — skip proxy entirely, use direct connection
-- `REDDIT_PROXY_SERVER` / `REDDIT_PROXY_USER` / `REDDIT_PROXY_PASS` — explicit single proxy override
-- `REDDIT_PROXY_MAX_ATTEMPTS` — how many proxies to try before failing (default: 20)
-- `NVIDIA_API_KEY` — required for LLM comment generation; cron script auto-loads from `~/.openclaw/.env`
+- `GEMINI_API_KEY` — used for Gemini models (primary); cron script auto-loads from `.env`
+- `NVIDIA_API_KEY` — used for NVIDIA fallback model; cron script auto-loads from `.env`
 
-**External file paths (hardcoded to `/home/adrcal/.openclaw/`):**
-- `workspace/interact/cookies.json` — Reddit session cookies (browser export format)
-- `residentialproxy.txt` — full Webshare proxy list (`host:port:user:pass` per line)
-- `workspace/interact/scripts/working_proxies.txt` — pre-vetted proxies (Playwright-validated, gitignored)
-
-## Proxy Selection Logic
-
-`RedditClient._proxy_candidates()` tries in priority order:
-1. `REDDIT_NO_PROXY=1` → no proxy
-2. `REDDIT_PROXY_SERVER` env var → single proxy
-3. `scripts/working_proxies.txt` (pre-vetted)
-4. `~/.openclaw/residentialproxy.txt` (full list)
-5. Hardcoded Webshare fallback
-
-On initialization, each proxy candidate is browser-tested against reddit.com before being accepted. A proxy is rejected if the page title contains "blocked" or shows Reddit's bot-block page.
+**Local file paths (all relative to repo root, gitignored):**
+- `cookies.json` — Reddit session cookies (browser export format)
+- `.env` — environment variables (e.g. `NVIDIA_API_KEY=...`)
+- `data/reddit_state.json` — daily quota and session deduplication state
+- `logs/` — per-run session markdown logs
 
 ## Reddit UI Selectors
 
